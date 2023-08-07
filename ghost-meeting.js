@@ -18,6 +18,13 @@ const xapi = require('xapi');
 /* 1. At what level is the human voice audible
  * Below you can set this level and enable sound detection
  */
+
+const TIMETOSHOWUP = 120; // grace period in seconds
+var currentEpoch;
+var meetingTimeEpoch;
+var refreshInterval2;
+var HAVEPEOPLESHOWNUP = false;
+
 const USE_SOUND = false;
 const SOUND_LEVEL = 50;
 
@@ -273,14 +280,13 @@ async function beginDetection() {
     await presence.enableDetector(); // to configure Cisco equipment to detect presence informations
 
     //when meeting starts
-    xapi.Event.Bookings.Start.on(async booking_info => {
-        console.log("Booking " + booking_info.Id + " detected");
+    //xapi.Event.Bookings.Start.on(async booking_info => {
+        //console.log("Booking " + bookingId + " detected");
         await presence.updatePresence(); // initialize data
-        bookingId = booking_info.Id;
         xapi.Status.Bookings.Availability.Status.get().then(availability => {
             if (availability === 'BookedUntil') {
                 xapi.Command.Bookings.Get({
-                    Id: booking_info.Id
+                    Id: bookingId
                 }).then(booking => {
                     meetingId = booking.Booking.MeetingId;
                     bookingIsActive = true;
@@ -318,7 +324,7 @@ async function beginDetection() {
                 console.log("Booking was detected but shouldn't have been");
             }
         });
-    });
+    //});
 
     //when meeting ends
     xapi.Event.Bookings.End.on(booking_info => {
@@ -529,8 +535,59 @@ function updateEverySecond() {
     }
 }
 
+function detectWhenMeetingStarts(){
+  xapi.Event.Bookings.Start.on(async booking_info => {
+    bookingId = booking_info.Id
+    console.log("Booking " + bookingId + " started");
+    getStartTime()
+  })
+}
+
+function getStartTime(){
+  xapi.command('Bookings Get', {Id: bookingId})
+  .then((response) => {
+    const meetingStartTime =  JSON.parse(response).Booking.Time.StartTime;
+    console.log("meetingStartTime: " + meetingStartTime)
+
+    meetingTimeEpoch = new Date(meetingStartTime).getTime() / 1000
+    console.log("meetingStartEpochTime: " + meetingTimeEpoch)
+
+    refreshInterval2 = setInterval(timer, 10000); // check every 10sec if someone has shown up
+  });
+}
+
+function timer(){
+  xapi.status.get('RoomAnalytics PeopleCount Current').then ((roomPeopleCount) => {
+    console.log("peopleCount: " + roomPeopleCount)
+    if(roomPeopleCount != 0 && HAVEPEOPLESHOWNUP != true){
+      HAVEPEOPLESHOWNUP = true
+    }
+  xapi.status.get('Time SystemTime').then ((value) => {
+    //console.log("SystemTime: " + value)
+    currentEpoch = new Date(value).getTime() / 1000
+  
+    var delayTime = meetingTimeEpoch + TIMETOSHOWUP
+    var timeLeft = delayTime - currentEpoch
+    console.log("People shown up is " + HAVEPEOPLESHOWNUP + " with " + timeLeft + "seconds left")
+    if(currentEpoch >= delayTime){
+      console.log("clearing timer")
+      clearInterval(refreshInterval2);
+      
+      if(HAVEPEOPLESHOWNUP == false){
+        console.log("no one shown up")
+        beginDetection();
+      }else{
+        console.log("someone has shown up, cancelling removal")
+        HAVEPEOPLESHOWNUP = false;
+      }
+    }
+  })
+  })
+}
+
 
 /**
  * START Detection
  */
-beginDetection();
+//beginDetection();
+detectWhenMeetingStarts();
